@@ -1,14 +1,6 @@
-"use client"
-
-import { useState, useEffect, useRef, useCallback } from "react"
-import io, { type Socket } from "socket.io-client"
-import { Smile } from 'lucide-react'
-import EmojiPicker from "emoji-picker-react"
-import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { toast, ToastContainer } from "react-toastify"
-import "react-toastify/dist/ReactToastify.css"
+import { Server as SocketIOServer } from "socket.io"
+import type { NextApiRequest } from "next"
+import type { NextApiResponseServerIO } from "@/types/next"
 
 type Message = {
   id: string
@@ -18,125 +10,122 @@ type Message = {
   color: string
 }
 
-export default function ChatPage() {
-  const [messages, setMessages] = useState<Message[]>([])
-  const [inputMessage, setInputMessage] = useState("")
-  const [isConnected, setIsConnected] = useState(false)
-  const [onlineUsers, setOnlineUsers] = useState(0)
-  const [nickname, setNickname] = useState("")
-  const [userColor, setUserColor] = useState("")
-  const [showNicknameModal, setShowNicknameModal] = useState(false)
-  const [tempNickname, setTempNickname] = useState("")
-  const [nicknameError, setNicknameError] = useState("")
-  const [isSubmitting, setIsSubmitting] = useState(false)
-  const [showEmojiPicker, setShowEmojiPicker] = useState(false)
-  const [isReconnecting, setIsReconnecting] = useState(false)
-  const socketRef = useRef<Socket | null>(null)
-  const messagesEndRef = useRef<HTMLDivElement>(null)
-  const retryCountRef = useRef(0)
-  const reconnectAttemptsRef = useRef(0)
+const chatHistory: Message[] = []
+const activeUsers = new Map<string, { nickname: string; color: string }>()
+const colors = [
+  "#FF5733",
+  "#33FF57",
+  "#3357FF",
+  "#FF33F1",
+  "#33FFF1",
+  "#F1FF33",
+  "#FF5733",
+  "#33FF57",
+  "#3357FF",
+  "#FF33F1",
+]
 
-  const scrollToBottom = useCallback(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" })
-  }, [])
+const SocketHandler = async (req: NextApiRequest, res: NextApiResponseServerIO) => {
+  if (!res.socket.server.io) {
+    console.log("Initializing Socket")
+    const io = new SocketIOServer(res.socket.server, {
+      path: "/api/socket",
+      addTrailingSlash: false,
+      pingTimeout: 120000,
+      pingInterval: 30000,
+      cors: {
+        origin: "*",
+        methods: ["GET", "POST", "OPTIONS"],
+        credentials: true,
+      },
+      transports: ["websocket", "polling"],
+      allowEIO3: true,
+    })
+    res.socket.server.io = io
 
-  useEffect(() => {
-    scrollToBottom()
-  }, [messages, scrollToBottom])
+    io.on("connection", (socket) => {
+      console.log("New client connected:", socket.id)
 
-  const handleReconnect = useCallback(() => {
-    if (socketRef.current) {
-      console.log("Manually attempting to reconnect...")
-      socketRef.current.connect()
-    }
-  }, [])
+      socket.emit("chat_history", chatHistory)
+      socket.emit("request_nickname")
 
-  useEffect(() => {
-    let socket: Socket
+      socket.on("set_nickname", (nickname: string, callback) => {
+        try {
+          console.log("Nickname request received:", nickname, "for Socket:", socket.id)
 
-    const connectSocket = () => {
-      console.log("Attempting to connect to socket...")
-      socket = io({
-        path: "/api/socket",
-        addTrailingSlash: false,
-        timeout: 45000,
-        reconnection: true,
-        reconnectionAttempts: 10,
-        reconnectionDelay: 1000,
-        reconnectionDelayMax: 5000,
-        randomizationFactor: 0.5,
-        transports: ['websocket', 'polling'],
-        upgrade: true,
-        forceNew: true,
-        withCredentials: true,
-        autoConnect: true
-      })
+          if (!nickname || nickname.trim() === "") {
+            console.log("Empty nickname received")
+            callback({ success: false, error: "Nickname cannot be empty" })
+            return
+          }
 
-      socketRef.current = socket
+          const isNicknameTaken = Array.from(activeUsers.values()).some((user) => user.nickname === nickname)
 
-      socket.on("connect", () => {
-        console.log("Connected to Heyframe")
-        setIsConnected(true)
-        setIsReconnecting(false)
-        reconnectAttemptsRef.current = 0
-        toast.success("Connected to chat server")
-      })
+          if (isNicknameTaken) {
+            console.log("Nickname already taken:", nickname)
+            callback({ success: false, error: "This nickname is already taken" })
+            return
+          }
 
-      socket.on("connect_error", (error) => {
-        console.error("Connection error:", error)
-        setIsConnected(false)
-        setNicknameError("Connection error - Please try again")
-        setIsSubmitting(false)
-        toast.error("Failed to connect to chat server")
-      })
+          const color = colors[Math.floor(Math.random() * colors.length)]
+          activeUsers.set(socket.id, { nickname, color })
 
-      socket.on("disconnect", (reason) => {
-        console.log("Disconnected from Heyframe:", reason)
-        setIsConnected(false)
-        setIsReconnecting(true)
-        toast.warn("Disconnected from chat server - Attempting to reconnect...")
-        
-        if (reason === "io server disconnect") {
-          socket.connect()
+          console.log("Nickname set:", nickname, "for Socket:", socket.id)
+
+          socket.emit("nickname_set", { nickname, color })
+          io.emit("users_count", activeUsers.size)
+          socket.emit("chat_history", chatHistory)
+
+          callback({ success: true })
+
+          console.log("Active users:", activeUsers.size)
+        } catch (error) {
+          console.error("Error setting nickname:", error)
+          callback({ success: false, error: "Error setting nickname" })
         }
       })
 
-      socket.on("error", (error) => {
-        console.error("Socket error:", error)
-        setNicknameError("An error occurred")
-        setIsSubmitting(false)
-        toast.error("An error occurred with the chat connection")
-      })
+      socket.on("send_message", (msg: { id: string; text: string; timestamp: number }, callback) => {
+        try {
+          const user = activeUsers.get(socket.id)
+          if (!user) {
+            console.log("No user found for Socket:", socket.id)
+            callback(false)
+            return
+          }
 
-      socket.on("reconnect", (attemptNumber) => {
-        console.log("Reconnected after", attemptNumber, "attempts")
-        setIsReconnecting(false)
-        toast.success("Reconnected to chat server")
-      })
+          const fullMessage = {
+            ...msg,
+            nickname: user.nickname,
+            color: user.color,
+          }
 
-      socket.on("reconnect_attempt", (attemptNumber) => {
-        console.log("Attempting to reconnect:", attemptNumber)
-        setIsReconnecting(true)
-        reconnectAttemptsRef.current = attemptNumber
-        if (attemptNumber > 1) {
-          toast.info(`Reconnection attempt ${attemptNumber}...`)
+          chatHistory.push(fullMessage)
+          console.log("Message sent to all clients:", fullMessage)
+          io.emit("receive_message", fullMessage)
+          callback(true)
+        } catch (error) {
+          console.error("Error sending message:", error)
+          callback(false)
         }
       })
 
-      socket.on("reconnect_error", (error) => {
-        console.error("Reconnection error:", error)
-        toast.error("Failed to reconnect - Retrying...")
+      socket.on("disconnect", () => {
+        activeUsers.delete(socket.id)
+        io.emit("users_count", activeUsers.size)
+        console.log("Client disconnected:", socket.id)
+        console.log("Active users:", activeUsers.size)
       })
+    })
+  }
+  res.end()
+}
 
-      socket.on("reconnect_failed", () => {
-        console.error("Failed to reconnect")
-        setIsReconnecting(false)
-        toast.error("Failed to reconnect to chat server")
-      })
+export const config = {
+  api: {
+    bodyParser: false,
+  },
+}
 
-      socket.on("ping", (callback) => {
-        callback()
-      })
+export default SocketHandler
 
-      socket.on("request_nickname", () => {
-        

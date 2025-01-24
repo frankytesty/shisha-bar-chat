@@ -68,8 +68,6 @@ export default function ChatPage() {
         transports: ["websocket", "polling"],
         upgrade: true,
         forceNew: true,
-        withCredentials: true,
-        autoConnect: true,
       })
 
       socketRef.current = socket
@@ -132,10 +130,6 @@ export default function ChatPage() {
         console.error("Failed to reconnect")
         setIsReconnecting(false)
         toast.error("Failed to reconnect to chat server")
-      })
-
-      socket.on("ping", (callback) => {
-        callback()
       })
 
       socket.on("request_nickname", () => {
@@ -235,7 +229,7 @@ export default function ChatPage() {
               setIsSubmitting(false)
               toast.error("Nickname setting timed out. Please try again.")
             }
-          }, 30000) // Erhöht auf 30 Sekunden
+          }, 30000)
         } catch (error) {
           console.error("Error sending nickname:", error)
           setNicknameError("Error sending nickname")
