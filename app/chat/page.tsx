@@ -30,11 +30,9 @@ export default function ChatPage() {
   const [nicknameError, setNicknameError] = useState("")
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [showEmojiPicker, setShowEmojiPicker] = useState(false)
-  const [isReconnecting, setIsReconnecting] = useState(false)
   const socketRef = useRef<Socket | null>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
-  const retryCountRef = useRef(0)
-  const reconnectAttemptsRef = useRef(0)
+  const connectionAttemptsRef = useRef(0)
 
   const scrollToBottom = useCallback(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" })
@@ -44,92 +42,53 @@ export default function ChatPage() {
     scrollToBottom()
   }, [messages, scrollToBottom])
 
-  const handleReconnect = useCallback(() => {
-    if (socketRef.current) {
-      console.log("Manually attempting to reconnect...")
-      socketRef.current.connect()
-    }
-  }, [])
-
   useEffect(() => {
-    let socket: Socket
+    const initializeSocket = () => {
+      if (socketRef.current?.connected) {
+        console.log("Socket already connected")
+        return
+      }
 
-    const connectSocket = () => {
-      console.log("Attempting to connect to socket...")
-      socket = io({
+      console.log("Initializing socket connection...")
+      const socket = io({
         path: "/api/socket",
         addTrailingSlash: false,
-        timeout: 45000,
         reconnection: true,
-        reconnectionAttempts: 10,
+        reconnectionAttempts: 5,
         reconnectionDelay: 1000,
-        reconnectionDelayMax: 5000,
-        randomizationFactor: 0.5,
+        timeout: 10000,
         transports: ["websocket", "polling"],
-        upgrade: true,
-        forceNew: true,
       })
 
       socketRef.current = socket
 
       socket.on("connect", () => {
-        console.log("Connected to Heyframe")
+        console.log("Connected to server")
         setIsConnected(true)
-        setIsReconnecting(false)
-        reconnectAttemptsRef.current = 0
+        connectionAttemptsRef.current = 0
         toast.success("Connected to chat server")
       })
 
       socket.on("connect_error", (error) => {
         console.error("Connection error:", error)
+        connectionAttemptsRef.current++
         setIsConnected(false)
-        setNicknameError("Connection error - Please try again")
-        setIsSubmitting(false)
-        toast.error("Failed to connect to chat server")
+
+        if (connectionAttemptsRef.current <= 3) {
+          toast.error(`Connection failed (Attempt ${connectionAttemptsRef.current}/3). Retrying...`)
+          setTimeout(() => {
+            console.log("Attempting to reconnect...")
+            socket.connect()
+          }, 2000)
+        } else {
+          toast.error("Could not connect to server. Please refresh the page.")
+        }
       })
 
       socket.on("disconnect", (reason) => {
-        console.log("Disconnected from Heyframe:", reason)
+        console.log("Disconnected:", reason)
         setIsConnected(false)
-        setIsReconnecting(true)
-        toast.warn("Disconnected from chat server - Attempting to reconnect...")
-
-        if (reason === "io server disconnect") {
-          socket.connect()
-        }
-      })
-
-      socket.on("error", (error) => {
-        console.error("Socket error:", error)
-        setNicknameError("An error occurred")
-        setIsSubmitting(false)
-        toast.error("An error occurred with the chat connection")
-      })
-
-      socket.on("reconnect", (attemptNumber) => {
-        console.log("Reconnected after", attemptNumber, "attempts")
-        setIsReconnecting(false)
-        toast.success("Reconnected to chat server")
-      })
-
-      socket.on("reconnect_attempt", (attemptNumber) => {
-        console.log("Attempting to reconnect:", attemptNumber)
-        setIsReconnecting(true)
-        reconnectAttemptsRef.current = attemptNumber
-        if (attemptNumber > 1) {
-          toast.info(`Reconnection attempt ${attemptNumber}...`)
-        }
-      })
-
-      socket.on("reconnect_error", (error) => {
-        console.error("Reconnection error:", error)
-        toast.error("Failed to reconnect - Retrying...")
-      })
-
-      socket.on("reconnect_failed", () => {
-        console.error("Failed to reconnect")
-        setIsReconnecting(false)
-        toast.error("Failed to reconnect to chat server")
+        toast.warning("Disconnected from server")
       })
 
       socket.on("request_nickname", () => {
@@ -138,44 +97,34 @@ export default function ChatPage() {
       })
 
       socket.on("nickname_set", ({ nickname, color }) => {
-        console.log("Nickname set:", nickname)
         setNickname(nickname)
         setUserColor(color)
         setShowNicknameModal(false)
         setIsSubmitting(false)
         setNicknameError("")
-        toast.success(`Nickname set to ${nickname}`)
-        retryCountRef.current = 0
-      })
-
-      socket.on("nickname_error", (error: string) => {
-        console.error("Nickname error:", error)
-        setNicknameError(error)
-        setIsSubmitting(false)
-        toast.error(`Nickname error: ${error}`)
+        toast.success(`Welcome, ${nickname}!`)
       })
 
       socket.on("chat_history", (history: Message[]) => {
-        console.log("Chat history received:", history)
         setMessages(history)
       })
 
       socket.on("receive_message", (msg: Message) => {
-        console.log("New message received:", msg)
         setMessages((prev) => [...prev, msg])
       })
 
       socket.on("users_count", (count: number) => {
-        console.log("Active users:", count)
         setOnlineUsers(count)
       })
+
+      return socket
     }
 
-    connectSocket()
+    const socket = initializeSocket()
 
     return () => {
       if (socket) {
-        console.log("Disconnecting socket...")
+        console.log("Cleaning up socket connection")
         socket.disconnect()
       }
     }
@@ -191,76 +140,46 @@ export default function ChatPage() {
       }
 
       if (!socketRef.current?.connected) {
-        setNicknameError("No connection to server. Please try again.")
-        setIsSubmitting(false)
+        setNicknameError("No connection to server")
         return
       }
 
-      const setNicknameWithRetry = () => {
-        try {
-          setIsSubmitting(true)
-          setNicknameError("")
-          console.log("Sending nickname:", tempNickname)
-          socketRef.current?.emit("set_nickname", tempNickname, (response: { success: boolean; error?: string }) => {
-            if (response.success) {
-              console.log("Nickname set successfully")
-            } else {
-              console.error("Error setting nickname:", response.error)
-              setNicknameError(response.error || "Error setting nickname")
-              setIsSubmitting(false)
-              toast.error(`Failed to set nickname: ${response.error}`)
+      setIsSubmitting(true)
+      setNicknameError("")
 
-              if (retryCountRef.current < 3) {
-                retryCountRef.current++
-                setTimeout(() => {
-                  console.log(`Retrying to set nickname (attempt ${retryCountRef.current})`)
-                  setNicknameWithRetry()
-                }, 2000)
-              } else {
-                toast.error("Failed to set nickname after multiple attempts. Please try again later.")
-                retryCountRef.current = 0
-              }
-            }
-          })
-
-          setTimeout(() => {
-            if (showNicknameModal) {
-              setNicknameError("Timeout - Please try again")
-              setIsSubmitting(false)
-              toast.error("Nickname setting timed out. Please try again.")
-            }
-          }, 30000)
-        } catch (error) {
-          console.error("Error sending nickname:", error)
-          setNicknameError("Error sending nickname")
+      socketRef.current.emit("set_nickname", tempNickname, (response: { success: boolean; error?: string }) => {
+        if (!response.success) {
+          setNicknameError(response.error || "Error setting nickname")
           setIsSubmitting(false)
-          toast.error("An error occurred while setting nickname")
+          toast.error(response.error || "Failed to set nickname")
         }
-      }
-
-      setNicknameWithRetry()
+      })
     },
-    [tempNickname, showNicknameModal],
+    [tempNickname],
   )
 
   const sendMessage = useCallback(
     (e: React.FormEvent) => {
       e.preventDefault()
-      if (inputMessage.trim() && socketRef.current && nickname) {
-        const message = {
-          id: Math.random().toString(36).substr(2, 9),
-          text: inputMessage.trim(),
-          timestamp: Date.now(),
-        }
-        socketRef.current.emit("send_message", message, (ack: boolean) => {
-          if (!ack) {
-            console.error("Message not acknowledged by server")
-            toast.error("Failed to send message. Please try again.")
-          }
-        })
-        setInputMessage("")
-        setShowEmojiPicker(false)
+
+      if (!inputMessage.trim() || !socketRef.current?.connected || !nickname) {
+        return
       }
+
+      const message = {
+        id: Math.random().toString(36).substr(2, 9),
+        text: inputMessage.trim(),
+        timestamp: Date.now(),
+      }
+
+      socketRef.current.emit("send_message", message, (ack: boolean) => {
+        if (!ack) {
+          toast.error("Failed to send message")
+        }
+      })
+
+      setInputMessage("")
+      setShowEmojiPicker(false)
     },
     [inputMessage, nickname],
   )
@@ -317,10 +236,7 @@ export default function ChatPage() {
         <h1 className="text-3xl font-bold text-center mb-2">Heyframe</h1>
         <div className="flex items-center justify-center gap-4 text-sm">
           <span className={`w-2 h-2 rounded-full ${isConnected ? "bg-green-400" : "bg-red-400"}`}></span>
-          <p>
-            {isConnected ? "Connected" : isReconnecting ? "Reconnecting..." : "Disconnected"}
-            {isReconnecting && reconnectAttemptsRef.current > 0 && ` (Attempt ${reconnectAttemptsRef.current})`}
-          </p>
+          <p>{isConnected ? "Connected" : "Disconnected"}</p>
           <span>•</span>
           <p>
             {onlineUsers} {onlineUsers === 1 ? "person" : "people"} online
@@ -334,19 +250,6 @@ export default function ChatPage() {
             </>
           )}
         </div>
-        {!isConnected && (
-          <div className="flex justify-center mt-2">
-            <Button
-              onClick={handleReconnect}
-              disabled={isReconnecting}
-              variant="outline"
-              size="sm"
-              className="text-white border-white hover:bg-white/10"
-            >
-              {isReconnecting ? "Reconnecting..." : "Reconnect"}
-            </Button>
-          </div>
-        )}
       </div>
 
       <div className="flex-1 overflow-y-auto p-4">
