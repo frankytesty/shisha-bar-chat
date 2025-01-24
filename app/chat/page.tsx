@@ -30,8 +30,10 @@ export default function ChatPage() {
   const [nicknameError, setNicknameError] = useState("")
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [showEmojiPicker, setShowEmojiPicker] = useState(false)
+  const [typingUsers, setTypingUsers] = useState<string[]>([])
   const socketRef = useRef<Socket | null>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
+  const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null)
 
   const scrollToBottom = useCallback(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" })
@@ -42,28 +44,60 @@ export default function ChatPage() {
   }, [messages, scrollToBottom])
 
   useEffect(() => {
+    console.log("Initialisiere Socket.IO-Verbindung...")
+
+    // Debug-Information über die aktuelle Umgebung
+    const protocol = window.location.protocol
+    const host = window.location.host
+    console.log(`Aktuelle Umgebung: ${protocol}//${host}`)
+
     const socket = io({
       path: "/api/socket",
       addTrailingSlash: false,
       transports: ["polling", "websocket"],
       reconnectionAttempts: 3,
+      timeout: 10000, // 10 Sekunden Timeout
+      debug: true, // Aktiviert detailliertes Socket.IO-Debugging
     })
 
     socketRef.current = socket
 
     socket.on("connect", () => {
+      console.log("Verbunden mit Socket.ID:", socket.id)
       setIsConnected(true)
-      toast.success("Connected to chat server")
+      toast.success("Mit dem Chat-Server verbunden")
     })
 
-    socket.on("connect_error", () => {
+    socket.on("connect_error", (error) => {
+      console.error("Verbindungsfehler:", error)
+      console.log("Fehlerdetails:", {
+        message: error.message,
+        description: error.description,
+        context: error.context,
+      })
       setIsConnected(false)
-      toast.error("Failed to connect to chat server")
+      toast.error(`Verbindungsfehler: ${error.message}`)
+    })
+
+    socket.on("connect_timeout", () => {
+      console.error("Verbindungs-Timeout")
+      setIsConnected(false)
+      toast.error("Verbindungs-Timeout - Server nicht erreichbar")
+    })
+
+    socket.on("reconnect_attempt", (attemptNumber) => {
+      console.log(`Verbindungsversuch ${attemptNumber} von 3`)
+      toast.info(`Verbindungsversuch ${attemptNumber} von 3`)
+    })
+
+    socket.on("reconnect_failed", () => {
+      console.error("Alle Verbindungsversuche fehlgeschlagen")
+      toast.error("Verbindung konnte nicht hergestellt werden")
     })
 
     socket.on("disconnect", () => {
       setIsConnected(false)
-      toast.warn("Disconnected from chat server")
+      toast.warn("Vom Chat-Server getrennt")
     })
 
     socket.on("request_nickname", () => {
@@ -76,7 +110,7 @@ export default function ChatPage() {
       setShowNicknameModal(false)
       setIsSubmitting(false)
       setNicknameError("")
-      toast.success(`Welcome, ${nickname}!`)
+      toast.success(`Willkommen, ${nickname}!`)
     })
 
     socket.on("chat_history", (history: Message[]) => {
@@ -91,7 +125,12 @@ export default function ChatPage() {
       setOnlineUsers(count)
     })
 
+    socket.on("typing_update", (users: string[]) => {
+      setTypingUsers(users)
+    })
+
     return () => {
+      console.log("Trenne Socket.IO-Verbindung...")
       socket.disconnect()
     }
   }, [])
@@ -101,12 +140,12 @@ export default function ChatPage() {
       e.preventDefault()
 
       if (!tempNickname.trim()) {
-        setNicknameError("Please enter a nickname")
+        setNicknameError("Bitte geben Sie einen Spitznamen ein")
         return
       }
 
       if (!socketRef.current?.connected) {
-        setNicknameError("No connection to server")
+        setNicknameError("Keine Verbindung zum Server")
         return
       }
 
@@ -115,7 +154,7 @@ export default function ChatPage() {
 
       socketRef.current.emit("set_nickname", tempNickname, (response: { success: boolean; error?: string }) => {
         if (!response.success) {
-          setNicknameError(response.error || "Error setting nickname")
+          setNicknameError(response.error || "Fehler beim Setzen des Spitznamens")
           setIsSubmitting(false)
         }
       })
@@ -139,7 +178,7 @@ export default function ChatPage() {
 
       socketRef.current.emit("send_message", message, (ack: boolean) => {
         if (!ack) {
-          toast.error("Failed to send message")
+          toast.error("Nachricht konnte nicht gesendet werden")
         }
       })
 
@@ -151,6 +190,24 @@ export default function ChatPage() {
 
   const handleEmojiClick = (emojiObject: any) => {
     setInputMessage((prevInput) => prevInput + emojiObject.emoji)
+  }
+
+  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setInputMessage(e.target.value)
+
+    if (socketRef.current?.connected) {
+      socketRef.current.emit("typing_start")
+
+      if (typingTimeoutRef.current) {
+        clearTimeout(typingTimeoutRef.current)
+      }
+
+      typingTimeoutRef.current = setTimeout(() => {
+        if (socketRef.current?.connected) {
+          socketRef.current.emit("typing_end")
+        }
+      }, 1000)
+    }
   }
 
   return (
@@ -171,7 +228,7 @@ export default function ChatPage() {
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
           <Card className="w-full max-w-md mx-4">
             <CardHeader>
-              <CardTitle>Choose your nickname</CardTitle>
+              <CardTitle>Wählen Sie Ihren Spitznamen</CardTitle>
             </CardHeader>
             <CardContent>
               <form onSubmit={handleSetNickname}>
@@ -183,13 +240,13 @@ export default function ChatPage() {
                     setNicknameError("")
                   }}
                   className={`mb-2 ${nicknameError ? "border-red-500" : ""}`}
-                  placeholder="Your nickname"
+                  placeholder="Ihr Spitzname"
                   disabled={isSubmitting}
                   autoFocus
                 />
                 {nicknameError && <p className="text-red-500 text-sm mb-2">{nicknameError}</p>}
                 <Button type="submit" className="w-full" disabled={isSubmitting || !tempNickname.trim()}>
-                  {isSubmitting ? "Saving..." : "Confirm"}
+                  {isSubmitting ? "Wird gespeichert..." : "Bestätigen"}
                 </Button>
               </form>
             </CardContent>
@@ -201,16 +258,16 @@ export default function ChatPage() {
         <h1 className="text-3xl font-bold text-center mb-2">Heyframe</h1>
         <div className="flex items-center justify-center gap-4 text-sm">
           <span className={`w-2 h-2 rounded-full ${isConnected ? "bg-green-400" : "bg-red-400"}`}></span>
-          <p>{isConnected ? "Connected" : "Disconnected"}</p>
+          <p>{isConnected ? "Verbunden" : "Getrennt"}</p>
           <span>•</span>
           <p>
-            {onlineUsers} {onlineUsers === 1 ? "person" : "people"} online
+            {onlineUsers} {onlineUsers === 1 ? "Person" : "Personen"} online
           </p>
           {nickname && (
             <>
               <span>•</span>
               <p>
-                You are: <span style={{ color: userColor }}>{nickname}</span>
+                Sie sind: <span style={{ color: userColor }}>{nickname}</span>
               </p>
             </>
           )}
@@ -234,13 +291,19 @@ export default function ChatPage() {
         </div>
       </div>
 
+      {typingUsers.length > 0 && (
+        <div className="bg-black bg-opacity-50 text-white p-2 text-sm">
+          {typingUsers.join(", ")} {typingUsers.length === 1 ? "tippt" : "tippen"}...
+        </div>
+      )}
+
       <form onSubmit={sendMessage} className="p-4 bg-black bg-opacity-50">
         <div className="max-w-3xl mx-auto flex gap-2 relative">
           <Input
             type="text"
             value={inputMessage}
-            onChange={(e) => setInputMessage(e.target.value)}
-            placeholder="Type your message..."
+            onChange={handleInputChange}
+            placeholder="Geben Sie Ihre Nachricht ein..."
             className="flex-1 bg-white bg-opacity-20 text-white placeholder-gray-400"
             disabled={!isConnected || !nickname}
           />
@@ -248,7 +311,7 @@ export default function ChatPage() {
             <Smile className="h-4 w-4" />
           </Button>
           <Button type="submit" disabled={!isConnected || !nickname || !inputMessage.trim()}>
-            Send
+            Senden
           </Button>
           {showEmojiPicker && (
             <div className="absolute bottom-full right-0 mb-2">

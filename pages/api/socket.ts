@@ -12,6 +12,7 @@ type Message = {
 
 const chatHistory: Message[] = []
 const activeUsers = new Map<string, { nickname: string; color: string }>()
+const typingUsers = new Set<string>()
 const colors = [
   "#FF5733",
   "#33FF57",
@@ -26,8 +27,15 @@ const colors = [
 ]
 
 const SocketHandler = (req: NextApiRequest, res: NextApiResponseServerIO) => {
+  console.log("Socket.IO Handler aufgerufen", {
+    method: req.method,
+    url: req.url,
+    headers: req.headers,
+  })
+
   if (!res.socket.server.io) {
-    console.log("Initializing Socket.IO server...")
+    console.log("Initialisiere Socket.IO-Server...")
+
     const io = new SocketIOServer(res.socket.server, {
       path: "/api/socket",
       addTrailingSlash: false,
@@ -37,12 +45,27 @@ const SocketHandler = (req: NextApiRequest, res: NextApiResponseServerIO) => {
         methods: ["GET", "POST"],
         credentials: true,
       },
+      connectTimeout: 10000,
+      pingTimeout: 5000,
+      pingInterval: 10000,
     })
 
-    res.socket.server.io = io
+    io.engine.on("connection_error", (err) => {
+      console.error("Socket.IO Engine Fehler:", {
+        type: err.type,
+        description: err.description,
+        context: err.context,
+      })
+    })
 
     io.on("connection", (socket) => {
-      console.log("New client connected:", socket.id)
+      console.log("Neue Client-Verbindung:", {
+        id: socket.id,
+        transport: socket.conn.transport.name,
+        headers: socket.handshake.headers,
+        query: socket.handshake.query,
+        address: socket.handshake.address,
+      })
 
       socket.emit("chat_history", chatHistory)
       socket.emit("request_nickname")
@@ -97,14 +120,44 @@ const SocketHandler = (req: NextApiRequest, res: NextApiResponseServerIO) => {
         }
       })
 
+      socket.on("typing_start", () => {
+        const user = activeUsers.get(socket.id)
+        if (user) {
+          typingUsers.add(user.nickname)
+          socket.broadcast.emit("typing_update", Array.from(typingUsers))
+        }
+      })
+
+      socket.on("typing_end", () => {
+        const user = activeUsers.get(socket.id)
+        if (user) {
+          typingUsers.delete(user.nickname)
+          socket.broadcast.emit("typing_update", Array.from(typingUsers))
+        }
+      })
+
       socket.on("disconnect", () => {
+        const user = activeUsers.get(socket.id)
+        if (user) {
+          typingUsers.delete(user.nickname)
+          socket.broadcast.emit("typing_update", Array.from(typingUsers))
+        }
         activeUsers.delete(socket.id)
         io.emit("users_count", activeUsers.size)
         console.log("Client disconnected:", socket.id)
       })
+
+      socket.on("disconnect", (reason) => {
+        console.log("Client getrennt:", {
+          id: socket.id,
+          reason: reason,
+        })
+      })
     })
+
+    res.socket.server.io = io
   } else {
-    console.log("Socket.IO server already running")
+    console.log("Socket.IO-Server läuft bereits")
   }
 
   res.end()
