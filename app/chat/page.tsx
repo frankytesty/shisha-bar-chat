@@ -30,9 +30,11 @@ export default function ChatPage() {
   const [nicknameError, setNicknameError] = useState("")
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [showEmojiPicker, setShowEmojiPicker] = useState(false)
+  const [isReconnecting, setIsReconnecting] = useState(false)
   const socketRef = useRef<Socket | null>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const retryCountRef = useRef(0)
+  const reconnectAttemptsRef = useRef(0)
 
   const scrollToBottom = useCallback(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" })
@@ -42,6 +44,13 @@ export default function ChatPage() {
     scrollToBottom()
   }, [messages, scrollToBottom])
 
+  const handleReconnect = useCallback(() => {
+    if (socketRef.current) {
+      console.log("Manually attempting to reconnect...")
+      socketRef.current.connect()
+    }
+  }, [])
+
   useEffect(() => {
     let socket: Socket
 
@@ -50,14 +59,17 @@ export default function ChatPage() {
       socket = io({
         path: "/api/socket",
         addTrailingSlash: false,
-        timeout: 30000,
+        timeout: 45000,
         reconnection: true,
-        reconnectionAttempts: 5,
+        reconnectionAttempts: 10,
         reconnectionDelay: 1000,
-        transports: ["polling", "websocket"],
+        reconnectionDelayMax: 5000,
+        randomizationFactor: 0.5,
+        transports: ["websocket", "polling"],
         upgrade: true,
         forceNew: true,
         withCredentials: true,
+        autoConnect: true,
       })
 
       socketRef.current = socket
@@ -65,13 +77,15 @@ export default function ChatPage() {
       socket.on("connect", () => {
         console.log("Connected to Heyframe")
         setIsConnected(true)
+        setIsReconnecting(false)
+        reconnectAttemptsRef.current = 0
         toast.success("Connected to chat server")
       })
 
       socket.on("connect_error", (error) => {
         console.error("Connection error:", error)
         setIsConnected(false)
-        setNicknameError("Connection error - Please reload the page")
+        setNicknameError("Connection error - Please try again")
         setIsSubmitting(false)
         toast.error("Failed to connect to chat server")
       })
@@ -79,7 +93,9 @@ export default function ChatPage() {
       socket.on("disconnect", (reason) => {
         console.log("Disconnected from Heyframe:", reason)
         setIsConnected(false)
-        toast.warn("Disconnected from chat server")
+        setIsReconnecting(true)
+        toast.warn("Disconnected from chat server - Attempting to reconnect...")
+
         if (reason === "io server disconnect") {
           socket.connect()
         }
@@ -90,6 +106,36 @@ export default function ChatPage() {
         setNicknameError("An error occurred")
         setIsSubmitting(false)
         toast.error("An error occurred with the chat connection")
+      })
+
+      socket.on("reconnect", (attemptNumber) => {
+        console.log("Reconnected after", attemptNumber, "attempts")
+        setIsReconnecting(false)
+        toast.success("Reconnected to chat server")
+      })
+
+      socket.on("reconnect_attempt", (attemptNumber) => {
+        console.log("Attempting to reconnect:", attemptNumber)
+        setIsReconnecting(true)
+        reconnectAttemptsRef.current = attemptNumber
+        if (attemptNumber > 1) {
+          toast.info(`Reconnection attempt ${attemptNumber}...`)
+        }
+      })
+
+      socket.on("reconnect_error", (error) => {
+        console.error("Reconnection error:", error)
+        toast.error("Failed to reconnect - Retrying...")
+      })
+
+      socket.on("reconnect_failed", () => {
+        console.error("Failed to reconnect")
+        setIsReconnecting(false)
+        toast.error("Failed to reconnect to chat server")
+      })
+
+      socket.on("ping", (callback) => {
+        callback()
       })
 
       socket.on("request_nickname", () => {
@@ -151,7 +197,7 @@ export default function ChatPage() {
       }
 
       if (!socketRef.current?.connected) {
-        setNicknameError("No connection to server. Please reload the page.")
+        setNicknameError("No connection to server. Please try again.")
         setIsSubmitting(false)
         return
       }
@@ -189,7 +235,7 @@ export default function ChatPage() {
               setIsSubmitting(false)
               toast.error("Nickname setting timed out. Please try again.")
             }
-          }, 20000)
+          }, 30000) // Erhöht auf 30 Sekunden
         } catch (error) {
           console.error("Error sending nickname:", error)
           setNicknameError("Error sending nickname")
@@ -277,7 +323,10 @@ export default function ChatPage() {
         <h1 className="text-3xl font-bold text-center mb-2">Heyframe</h1>
         <div className="flex items-center justify-center gap-4 text-sm">
           <span className={`w-2 h-2 rounded-full ${isConnected ? "bg-green-400" : "bg-red-400"}`}></span>
-          <p>{isConnected ? "Connected" : "Disconnected"}</p>
+          <p>
+            {isConnected ? "Connected" : isReconnecting ? "Reconnecting..." : "Disconnected"}
+            {isReconnecting && reconnectAttemptsRef.current > 0 && ` (Attempt ${reconnectAttemptsRef.current})`}
+          </p>
           <span>•</span>
           <p>
             {onlineUsers} {onlineUsers === 1 ? "person" : "people"} online
@@ -291,6 +340,19 @@ export default function ChatPage() {
             </>
           )}
         </div>
+        {!isConnected && (
+          <div className="flex justify-center mt-2">
+            <Button
+              onClick={handleReconnect}
+              disabled={isReconnecting}
+              variant="outline"
+              size="sm"
+              className="text-white border-white hover:bg-white/10"
+            >
+              {isReconnecting ? "Reconnecting..." : "Reconnect"}
+            </Button>
+          </div>
+        )}
       </div>
 
       <div className="flex-1 overflow-y-auto p-4">
