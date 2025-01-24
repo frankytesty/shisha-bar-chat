@@ -56,8 +56,7 @@ export default function ChatPage() {
       addTrailingSlash: false,
       transports: ["polling", "websocket"],
       reconnectionAttempts: 3,
-      timeout: 10000, // 10 Sekunden Timeout
-      debug: true, // Aktiviert detailliertes Socket.IO-Debugging
+      timeout: 10000,
     })
 
     socketRef.current = socket
