@@ -27,6 +27,7 @@ const colors = [
 
 const SocketHandler = (req: NextApiRequest, res: NextApiResponseServerIO) => {
   if (!res.socket.server.io) {
+    console.log("Initializing Socket.IO server...")
     const io = new SocketIOServer(res.socket.server, {
       path: "/api/socket",
       addTrailingSlash: false,
@@ -102,7 +103,10 @@ const SocketHandler = (req: NextApiRequest, res: NextApiResponseServerIO) => {
         console.log("Client disconnected:", socket.id)
       })
     })
+  } else {
+    console.log("Socket.IO server already running")
   }
+
   res.end()
 }
 
