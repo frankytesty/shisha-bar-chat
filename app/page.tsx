@@ -1,10 +1,10 @@
 import { headers } from "next/headers"
 
 export default async function Home() {
-  const headersList = headers()
-  const domain = headersList.get("host") || "localhost:3000"
+  const headersList = await headers()
+  const host = headersList.get("host") || process.env.VERCEL_URL || "localhost:3000"
   const protocol = process.env.NODE_ENV === "production" ? "https" : "http"
-  const chatUrl = `${protocol}://${domain}/chat`
+  const chatUrl = `${protocol}://${host}/chat`
 
   return (
     <main className="flex min-h-screen flex-col items-center justify-between p-24">
