@@ -27,7 +27,6 @@ const colors = [
 
 const SocketHandler = (req: NextApiRequest, res: NextApiResponseServerIO) => {
   if (!res.socket.server.io) {
-    console.log("Initializing Socket.IO server...")
     const io = new SocketIOServer(res.socket.server, {
       path: "/api/socket",
       addTrailingSlash: false,
@@ -35,7 +34,6 @@ const SocketHandler = (req: NextApiRequest, res: NextApiResponseServerIO) => {
       cors: {
         origin: "*",
         methods: ["GET", "POST"],
-        allowedHeaders: ["Content-Type"],
         credentials: true,
       },
     })
@@ -43,7 +41,7 @@ const SocketHandler = (req: NextApiRequest, res: NextApiResponseServerIO) => {
     res.socket.server.io = io
 
     io.on("connection", (socket) => {
-      console.log("New client connected")
+      console.log("New client connected:", socket.id)
 
       socket.emit("chat_history", chatHistory)
       socket.emit("request_nickname")
@@ -101,13 +99,10 @@ const SocketHandler = (req: NextApiRequest, res: NextApiResponseServerIO) => {
       socket.on("disconnect", () => {
         activeUsers.delete(socket.id)
         io.emit("users_count", activeUsers.size)
-        console.log("Client disconnected")
+        console.log("Client disconnected:", socket.id)
       })
     })
-  } else {
-    console.log("Socket.IO server already running")
   }
-
   res.end()
 }
 
