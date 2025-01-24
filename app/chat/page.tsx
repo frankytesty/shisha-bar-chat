@@ -71,8 +71,6 @@ export default function ChatPage() {
       console.error("Verbindungsfehler:", error)
       console.log("Fehlerdetails:", {
         message: error.message,
-        description: error.description,
-        context: error.context,
       })
       setIsConnected(false)
       toast.error(`Verbindungsfehler: ${error.message}`)
