@@ -32,7 +32,6 @@ export default function ChatPage() {
   const [showEmojiPicker, setShowEmojiPicker] = useState(false)
   const socketRef = useRef<Socket | null>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
-  const connectionAttemptsRef = useRef(0)
 
   const scrollToBottom = useCallback(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" })
@@ -43,90 +42,57 @@ export default function ChatPage() {
   }, [messages, scrollToBottom])
 
   useEffect(() => {
-    const initializeSocket = () => {
-      if (socketRef.current?.connected) {
-        console.log("Socket already connected")
-        return
-      }
+    const socket = io({
+      path: "/api/socket",
+      addTrailingSlash: false,
+      transports: ["polling", "websocket"],
+      reconnectionAttempts: 3,
+    })
 
-      console.log("Initializing socket connection...")
-      const socket = io({
-        path: "/api/socket",
-        addTrailingSlash: false,
-        reconnection: true,
-        reconnectionAttempts: 5,
-        reconnectionDelay: 1000,
-        timeout: 10000,
-        transports: ["websocket", "polling"],
-      })
+    socketRef.current = socket
 
-      socketRef.current = socket
+    socket.on("connect", () => {
+      setIsConnected(true)
+      toast.success("Connected to chat server")
+    })
 
-      socket.on("connect", () => {
-        console.log("Connected to server")
-        setIsConnected(true)
-        connectionAttemptsRef.current = 0
-        toast.success("Connected to chat server")
-      })
+    socket.on("connect_error", () => {
+      setIsConnected(false)
+      toast.error("Failed to connect to chat server")
+    })
 
-      socket.on("connect_error", (error) => {
-        console.error("Connection error:", error)
-        connectionAttemptsRef.current++
-        setIsConnected(false)
+    socket.on("disconnect", () => {
+      setIsConnected(false)
+      toast.warn("Disconnected from chat server")
+    })
 
-        if (connectionAttemptsRef.current <= 3) {
-          toast.error(`Connection failed (Attempt ${connectionAttemptsRef.current}/3). Retrying...`)
-          setTimeout(() => {
-            console.log("Attempting to reconnect...")
-            socket.connect()
-          }, 2000)
-        } else {
-          toast.error("Could not connect to server. Please refresh the page.")
-        }
-      })
+    socket.on("request_nickname", () => {
+      setShowNicknameModal(true)
+    })
 
-      socket.on("disconnect", (reason) => {
-        console.log("Disconnected:", reason)
-        setIsConnected(false)
-        toast.warning("Disconnected from server")
-      })
+    socket.on("nickname_set", ({ nickname, color }) => {
+      setNickname(nickname)
+      setUserColor(color)
+      setShowNicknameModal(false)
+      setIsSubmitting(false)
+      setNicknameError("")
+      toast.success(`Welcome, ${nickname}!`)
+    })
 
-      socket.on("request_nickname", () => {
-        console.log("Nickname requested")
-        setShowNicknameModal(true)
-      })
+    socket.on("chat_history", (history: Message[]) => {
+      setMessages(history)
+    })
 
-      socket.on("nickname_set", ({ nickname, color }) => {
-        setNickname(nickname)
-        setUserColor(color)
-        setShowNicknameModal(false)
-        setIsSubmitting(false)
-        setNicknameError("")
-        toast.success(`Welcome, ${nickname}!`)
-      })
+    socket.on("receive_message", (msg: Message) => {
+      setMessages((prev) => [...prev, msg])
+    })
 
-      socket.on("chat_history", (history: Message[]) => {
-        setMessages(history)
-      })
-
-      socket.on("receive_message", (msg: Message) => {
-        setMessages((prev) => [...prev, msg])
-      })
-
-      socket.on("users_count", (count: number) => {
-        setOnlineUsers(count)
-      })
-
-      return socket
-    }
-
-    const socket = initializeSocket()
+    socket.on("users_count", (count: number) => {
+      setOnlineUsers(count)
+    })
 
     return () => {
-      if (socket) {
-        console.log("Cleaning up socket connection")
-        socket.disconnect()
-      }
+      socket.disconnect()
     }
   }, [])
 
@@ -151,7 +117,6 @@ export default function ChatPage() {
         if (!response.success) {
           setNicknameError(response.error || "Error setting nickname")
           setIsSubmitting(false)
-          toast.error(response.error || "Failed to set nickname")
         }
       })
     },

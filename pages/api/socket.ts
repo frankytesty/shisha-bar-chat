@@ -27,40 +27,29 @@ const colors = [
 
 const SocketHandler = async (req: NextApiRequest, res: NextApiResponseServerIO) => {
   if (res.socket.server.io) {
-    console.log("Socket.IO server already running")
     res.end()
     return
   }
 
-  console.log("Setting up Socket.IO server...")
   const io = new SocketIOServer(res.socket.server, {
     path: "/api/socket",
     addTrailingSlash: false,
-    pingTimeout: 60000,
-    pingInterval: 25000,
+    transports: ["polling", "websocket"],
     cors: {
       origin: "*",
       methods: ["GET", "POST"],
     },
-    transports: ["websocket", "polling"],
-    allowEIO3: true,
-    connectTimeout: 45000,
   })
 
   io.on("connection", (socket) => {
     console.log("New client connected:", socket.id)
 
-    // Send initial data immediately on connection
     socket.emit("chat_history", chatHistory)
     socket.emit("request_nickname")
-    io.emit("users_count", activeUsers.size)
 
     socket.on("set_nickname", (nickname: string, callback) => {
       try {
-        console.log("Nickname request received:", nickname, "for Socket:", socket.id)
-
         if (!nickname || nickname.trim() === "") {
-          console.log("Empty nickname received")
           callback({ success: false, error: "Nickname cannot be empty" })
           return
         }
@@ -68,15 +57,12 @@ const SocketHandler = async (req: NextApiRequest, res: NextApiResponseServerIO) 
         const isNicknameTaken = Array.from(activeUsers.values()).some((user) => user.nickname === nickname)
 
         if (isNicknameTaken) {
-          console.log("Nickname already taken:", nickname)
           callback({ success: false, error: "This nickname is already taken" })
           return
         }
 
         const color = colors[Math.floor(Math.random() * colors.length)]
         activeUsers.set(socket.id, { nickname, color })
-
-        console.log("Nickname set:", nickname, "for Socket:", socket.id)
 
         socket.emit("nickname_set", { nickname, color })
         io.emit("users_count", activeUsers.size)
@@ -92,7 +78,6 @@ const SocketHandler = async (req: NextApiRequest, res: NextApiResponseServerIO) 
       try {
         const user = activeUsers.get(socket.id)
         if (!user) {
-          console.log("No user found for Socket:", socket.id)
           callback(false)
           return
         }
@@ -115,12 +100,10 @@ const SocketHandler = async (req: NextApiRequest, res: NextApiResponseServerIO) 
     socket.on("disconnect", () => {
       activeUsers.delete(socket.id)
       io.emit("users_count", activeUsers.size)
-      console.log("Client disconnected:", socket.id)
     })
   })
 
   res.socket.server.io = io
-  console.log("Socket.IO server initialized")
   res.end()
 }
 
